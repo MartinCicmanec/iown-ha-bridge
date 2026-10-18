@@ -296,14 +296,15 @@ On boot it runs a crypto self-test, joins WiFi and the broker, and publishes
 
 | Topic | Direction | Payload |
 | --- | --- | --- |
-| `iown/<name>/set` | command | `OPEN` / `CLOSE` / `STOP` / `MY` |
+| `iown/<name>/set` | command | `OPEN` / `CLOSE` / `STOP` |
+| `iown/<name>/my` | command | any payload (HA sends `MY`): go to favourite |
 | `iown/<name>/state` | status | `open` / `closed` (optimistic) |
 | `iown/<name>/counter` | status | current rolling counter (retained) |
 | `iown/<name>/counter/set` | command | force the counter to a value (resync) |
 
 Test everything with **MQTT Explorer** before relying on HA: watch
 `homeassistant/#` for the discovery configs and `iown/#` for state, then publish
-`OPEN`/`CLOSE`/`STOP`/`MY` to `iown/<name>/set`.
+`OPEN`/`CLOSE`/`STOP` to `iown/<name>/set`, or anything to `iown/<name>/my`.
 
 - **Stop** only visibly halts a blind that is *moving*.
 - **My** only goes somewhere if you've programmed a favourite with the physical
