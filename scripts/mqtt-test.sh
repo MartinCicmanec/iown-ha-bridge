@@ -7,6 +7,8 @@
 #   scripts/mqtt-test.sh <blind> open|close|stop  # e.g. scripts/mqtt-test.sh Blind_1 open
 #   scripts/mqtt-test.sh <blind> my               # go to favourite position
 #   scripts/mqtt-test.sh <blind> counter <n>      # resync the rolling counter (decimal)
+#   scripts/mqtt-test.sh <blind> pair             # pair the LoRa32's own identity (motor in pairing mode)
+#   scripts/mqtt-test.sh <blind> own open|close|stop|my  # test the own identity
 #
 # Broker settings come from the environment:
 #   MQTT_HOST (default localhost), MQTT_PORT (1883), MQTT_USER, MQTT_PASS
@@ -23,7 +25,7 @@ pub() {
   mosquitto_pub -h "$HOST" -p "$PORT" "${AUTH[@]}" -t "$1" -m "$2"
 }
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 [[ $# -ge 1 ]] || usage
 if [[ $1 == watch ]]; then
@@ -38,5 +40,7 @@ case $2 in
   stop)    pub "iown/$blind/set" STOP ;;
   my)      pub "iown/$blind/my" MY ;;
   counter) [[ $# -eq 3 ]] || usage; pub "iown/$blind/counter/set" "$3" ;;
+  pair)    pub "iown/$blind/pair" PAIR ;;
+  own)     [[ $# -eq 3 ]] || usage; pub "iown/$blind/own/set" "${3^^}" ;;
   *)       usage ;;
 esac

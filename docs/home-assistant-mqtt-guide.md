@@ -311,6 +311,9 @@ On boot it runs a crypto self-test, joins WiFi and the broker, and publishes
 | `iown/<name>/state` | status | `open` / `closed` (optimistic) |
 | `iown/<name>/counter` | status | current rolling counter (retained) |
 | `iown/<name>/counter/set` | command | force the counter to a value (resync) |
+| `iown/<name>/pair` | command | send the PROG pairing sequence from the LoRa32's own identity |
+| `iown/<name>/own/set` | command | `OPEN` / `CLOSE` / `STOP` / `MY` from the own identity (test) |
+| `iown/<name>/own/counter` | status | own identity's rolling counter (retained) |
 
 Test everything with **MQTT Explorer** before relying on HA: watch
 `homeassistant/#` for the discovery configs and `iown/#` for state, then publish
@@ -339,6 +342,23 @@ If a blind ever stops responding (counter fell behind), press the physical remot
 once (auto-tracking catches up) or publish a higher number to
 `iown/<name>/counter/set`.
 
+### Pairing the LoRa32 as its own controller
+
+Experimental, not yet verified on hardware. Each blind has a second identity:
+the LoRa32's own address (`IOWN_CTRL_ADDR` + blind index) with a key derived
+from `IOWN_CTRL_SECRET` (`scripts/Iown-GenController.py`) and its own counter.
+
+1. Stop the blind half-way (a jog is hard to see at an end stop).
+2. Hold PROG on the Situo channel that controls it until the blind jogs (about
+   3–4 s, never 7 s or more). The motor is now in pairing mode.
+3. Press the blind's **Pair** button in HA (or `scripts/mqtt-test.sh <name> pair`).
+   The LoRa32 sends the same frame sequence the Situo sends on PROG (`0x39`
+   remove, `0x30` with its secret, `0x20`/`0x2E` steps), from its own address.
+4. Test with `scripts/mqtt-test.sh <name> own open` / `own close`.
+5. Once it works, set `own = true` for that blind in `BLINDS[]` (`src/mqtt.cpp`)
+   and re-flash: the cover and My button then use the own identity, and the Situo
+   keeps its own counter.
+
 ---
 
 ## 10. Limitations
@@ -347,8 +367,8 @@ once (auto-tracking catches up) or publish a higher number to
   board and the physical remote share one counter at the motor and can push each
   other out of sync. Auto-tracking mitigates it, but the clean fix is to register
   the LoRa32 as its **own** controller (its own address + key, paired via the
-  motor's PROG procedure). That is in progress: the identity can be generated
-  (`scripts/Iown-GenController.py`), pairing is not implemented yet.
+  motor's PROG procedure). That is in progress, see
+  [Pairing the LoRa32 as its own controller](#pairing-the-lora32-as-its-own-controller).
 - **No feedback.** 1W is fire-and-forget; HA cover state is *assumed*, not
   measured. There is no true position reporting.
 - **Set-favourite** (long-press) is not implemented — program "My" on the
