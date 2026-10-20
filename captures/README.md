@@ -27,3 +27,28 @@ Observations (not verified):
 
 - Every command is repeated 3-4 times with the same counter. The first repeat has control byte 1 = `0x20`, the following ones `0x00`.
 - Every button press sends one `0x00` (execute function) followed by two `0x20` frames.
+
+## situo-prog_2026-10-20 (not committed)
+
+PROG presses on the same Situo, captured with the 64-byte sniffer. The raw log is
+**not** in the repo: the `0x30` frame carries the remote's QR productKey in clear.
+Decoded sequence of one PROG cycle (three cycles were captured, counters
+`37C3`, `37D3`, `37E8`):
+
+| Counter | Command | Parameters | Notes |
+| :-----: | :-----: | :--------- | :---- |
+| N | `0x39` remove 1W controller | `00` | MAC'd as usual |
+| N+1 | `0x30` send 1W key | `<16-byte key> 02 01` | ctrl0 `FC` (length 28), **no MAC**, counter inside the data |
+| N+2 | `0x20` private | `02 03 0C 00 00` | MAC'd |
+| N+3 … | `0x20` private | `02 03 05 <02, 03, …> 00` | one frame per step, ends with `05 FF 00` |
+| (within) | `0x2E` | `00` | after step `08`, first repeat ctrl1 `0x20` |
+
+Findings:
+
+- `0x30` layout: `30 | encrypted key (16) | manufacturer 02 | 01 | counter (2)`, with no MAC.
+  This differs from upstream's `demo()` frame (`Iown-ioCrypto.py`), which appends a MAC
+  over `30 + key` and has a length byte that can't fit it.
+- The encrypted key in `0x30` equals the Situo's QR productKey, so the QR code holds the
+  key exactly as the remote sends it during pairing.
+- The number of `02 03 05 xx` steps differs per cycle (up to `0C`, `11`, `0E`).
+  Possibly tied to how long PROG was held (not verified).

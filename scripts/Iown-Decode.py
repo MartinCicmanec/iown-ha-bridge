@@ -15,6 +15,9 @@ Usage: Iown-Decode.py <file> [--unique] [--key-header include/iown_key.h] [--fra
                   IOWN_PRODUCT_KEY in the header (see scripts/Iown-GenKeyHeader.py)
   --frames-out    write the distinct, CRC-valid frames (one hex per line) to a file,
                   e.g. for scripts/Iown-VerifyQRKey.py
+
+The key in 0x30 (send 1W key) frames is printed redacted: it equals the remote's
+QR productKey. Logs and frame files containing 0x30 frames are secret, too.
 """
 
 import argparse
@@ -44,7 +47,7 @@ def main_param(mp):
 
 def parse_lines(path):
   for line in open(path):
-    m = re.search(r"frame=([0-9A-Fa-f]+)", line)
+    m = re.search(r"full=([0-9A-Fa-f]+)", line) or re.search(r"frame=([0-9A-Fa-f]+)", line)
     hexstr = m.group(1) if m else line.strip()
     if hexstr and re.fullmatch(r"[0-9A-Fa-f]+", hexstr) and len(hexstr) % 2 == 0:
       rssi = re.search(r"rssi=(-?[0-9.]+)", line)
@@ -52,8 +55,15 @@ def parse_lines(path):
 
 
 def trim(frame):
-  """Cut the frame to the length in control byte 0 (+1 ctrl0, +2 CRC); the sniffer may append junk."""
+  """Cut the frame to the length in control byte 0 (+1 ctrl0, +2 CRC); the sniffer may append junk.
+  If that prefix fails the CRC, fall back to the shortest prefix (>= 11 bytes) that passes it,
+  for frames whose length byte doesn't match their size (e.g. upstream's 0x30 example)."""
   n = (frame[0] & 0x1F) + 3
+  if len(frame) >= n and ioCrypto.compute_crc_8408(frame[:n]) == 0:
+    return frame[:n]
+  for m in range(11, len(frame) + 1):
+    if ioCrypto.compute_crc_8408(frame[:m]) == 0:
+      return frame[:m]
   return frame[:n] if len(frame) >= n else None
 
 
@@ -70,22 +80,33 @@ def decode(frame, product_key):
   oneway = bool(c0 & 0x20)
   dest, src = frame[2:5], frame[5:8]
   crc_ok = ioCrypto.compute_crc_8408(frame) == 0
+  size = f"len {c0 & 0x1F}" + ("" if (c0 & 0x1F) + 3 == len(frame) else f", actual {len(frame) - 3}")
   out = [
-    f"{'1W' if oneway else '2W'} ctrl0={c0:02X} (len {c0 & 0x1F}) ctrl1={c1:02X}",
+    f"{'1W' if oneway else '2W'} ctrl0={c0:02X} ({size}) ctrl1={c1:02X}",
     f"dest={dest.hex().upper()} src={src.hex().upper()}",
   ]
-  if oneway:
+  if oneway and frame[8] == 0x30:
+    # 0x30 send 1W key (captured from a Situo): 30 <16 byte encrypted key> <manufacturer> <??> <counter>, no MAC
+    data, counter, mac = frame[8:-4], frame[-4:-2], None
+  elif oneway:
     data, counter, mac = frame[8:-10], frame[-10:-8], frame[-8:-2]
   else:
     data, counter, mac = frame[8:-2], None, None
   cmd = data[0] if data else None
-  out.append(f"cmd={cmd:02X} ({COMMANDS.get(cmd, '?')}) params={data[1:].hex().upper()}" if data else "cmd=-")
+  params = data[1:].hex().upper()
+  if cmd == 0x30 and len(data) == 19:
+    params = "<key redacted>" + data[17:].hex().upper() # the encrypted key is the remote's QR productKey: a secret
+  out.append(f"cmd={cmd:02X} ({COMMANDS.get(cmd, '?')}) params={params}" if data else "cmd=-")
   if cmd == 0x00 and len(data) >= 5:
     out.append(f"position={main_param(int.from_bytes(data[3:5], 'big'))}")
+  if cmd == 0x30 and len(data) == 19:
+    out.append(f"manufacturer={data[17]:02X} unknown={data[18]:02X}")
   if counter is not None:
-    out.append(f"counter={counter.hex().upper()} mac={mac.hex().upper()}")
+    out.append(f"counter={counter.hex().upper()}" + (f" mac={mac.hex().upper()}" if mac else " (no MAC)"))
   out.append(f"crc={'ok' if crc_ok else 'BAD'}")
-  if oneway and product_key and crc_ok:
+  if cmd == 0x30 and product_key and len(data) == 19:
+    out.append("key " + ("matches QR productKey" if data[1:17] == product_key else "differs from QR productKey"))
+  elif oneway and product_key and crc_ok:
     key = bytes(ioCrypto.encrypt_1W_key(src, product_key))
     out.append(f"mac={'ok' if ioCrypto.create_1W_hmac(counter, key, data) == mac else 'BAD'}")
   return "  ".join(out), crc_ok

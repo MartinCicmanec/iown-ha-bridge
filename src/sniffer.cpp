@@ -24,8 +24,9 @@
 
 #include "IoHome.h"
 
-// 34 byte max frame (ctrl byte + 31 + CRC) * 10 bit = 340 bit -> 43 byte. Round up.
-#define SNIFFER_RAW_LEN   (48)
+// 34 byte max frame (ctrl byte + 31 + CRC) * 10 bit = 340 bit -> 43 byte. Use the full 64 byte
+// SX127x FIFO (51 decoded bytes) to also catch frames longer than their length byte says (0x30?).
+#define SNIFFER_RAW_LEN   (64)
 #define SNIFFER_FRAME_MAX (SNIFFER_RAW_LEN * 8 / 10)
 
 LORA32_RADIO radio = new Module(LORA32_SPI_CS, LORA32_RADIO_IO0, LORA32_RADIO_RST, LORA32_RADIO_IO1);
@@ -102,12 +103,14 @@ void loop() {
     uint8_t frame[SNIFFER_FRAME_MAX];
     int errAt;
     size_t n = decodeUart(raw, SNIFFER_RAW_LEN, frame, SNIFFER_FRAME_MAX, &errAt);
-    // trim to frame length from ctrl byte 0: 1 + (len & 0x1F) + 2 CRC
+    // trim to frame length from ctrl byte 0: 1 + (len & 0x1F) + 2 CRC; keep the full decode too
+    size_t full = n;
     if(n > 0) {size_t want = 1 + (frame[0] & 0x1F) + 2;if(want < n) {n = want;}}
 
     Serial.print(F("RX rssi="));Serial.print(rssi, 1);
     Serial.print(F(" raw="));printHex(raw, SNIFFER_RAW_LEN);
     Serial.print(F(" frame="));printHex(frame, n);
+    if(full > n) {Serial.print(F(" full="));printHex(frame, full);}
     if(errAt >= 0) {Serial.print(F(" err@"));Serial.print(errAt);}
     Serial.println();
   } else {
