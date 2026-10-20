@@ -67,8 +67,8 @@ struct Blind {
   Ident       ctrl;  // LoRa32's own identity, filled at boot (IOWN_CTRL_ADDR + index)
 };
 static Blind BLINDS[] = {
-  {"Blind_1", {{0xB5,0x1A,0x3F}, 0x3700, PRODUCT_KEY, {0}}, false, {}}, // Situo channel 2
-  {"Blind_2", {{0xB5,0x1A,0x40}, 0x0600, PRODUCT_KEY, {0}}, false, {}}, // Situo channel 1
+  {"Blind_1", {{0xB5,0x1A,0x3F}, 0x3700, PRODUCT_KEY, {0}}, true, {}}, // Situo channel 2, paired 2026-10-21
+  {"Blind_2", {{0xB5,0x1A,0x40}, 0x0600, PRODUCT_KEY, {0}}, true, {}}, // Situo channel 1, paired 2026-10-21
 };
 static const size_t NBLINDS = sizeof(BLINDS) / sizeof(BLINDS[0]);
 
