@@ -10,8 +10,20 @@
 //
 // IOWN_NODE_ID / IOWN_KEY are a single channel's address and derived key, used
 // only by src/tx.cpp (the one-shot transmit test). src/mqtt.cpp ignores them.
+//
+// The optional controller identity block is the LoRa32's own 1W controller
+// (random base address + secret, for pairing it as a separate remote). Add it with:
+//
+//   python3 scripts/Iown-GenController.py
+//
+// Iown-GenKeyHeader.py keeps this block when it regenerates the header.
 #pragma once
 
 #define IOWN_NODE_ID     { 0x00, 0x00, 0x00 }                                                   // 3 bytes, frame order
 #define IOWN_KEY         { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 } // 16 bytes
 #define IOWN_PRODUCT_KEY { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 } // 16 bytes (from QR)
+
+// BEGIN controller identity (scripts/Iown-GenController.py) - back this up!
+#define IOWN_CTRL_ADDR   { 0x00, 0x00, 0x00 }                                                   // 3 bytes, base address
+#define IOWN_CTRL_SECRET { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 } // 16 bytes
+// END controller identity

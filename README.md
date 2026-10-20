@@ -22,6 +22,7 @@ as a git submodule (see [Attribution](#attribution)).
 | `scripts/Iown-Decode.py` | Decode frames, check CRC and 1W MAC |
 | `scripts/Iown-VerifyQRKey.py` | Check that the QR productKey reproduces sniffed MACs |
 | `scripts/Iown-GenKeyHeader.py` | Generate the git-ignored `include/iown_key.h` |
+| `scripts/Iown-GenController.py` | Add the LoRa32's own 1W controller identity to `include/iown_key.h` |
 | `scripts/mqtt-test.sh` | Drive the MQTT firmware with mosquitto clients |
 | `scripts/flash.sh` | Build, upload and reset the board in one step |
 | `scripts/upstream.py` | Loads upstream's Python crypto modules from the submodule |

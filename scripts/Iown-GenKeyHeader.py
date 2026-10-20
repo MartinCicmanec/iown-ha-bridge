@@ -11,6 +11,7 @@ Usage: Iown-GenKeyHeader.py <qr payload file> <output header path> [node id hex]
                channel). Defaults to the address embedded in the QR payload.
 """
 
+import re
 import sys
 
 from upstream import ioCrypto
@@ -47,6 +48,15 @@ def main(args):
 // Raw QR productKey (used by src/mqtt.cpp to derive each channel's key from its address)
 #define IOWN_PRODUCT_KEY {c_array(product_key)} // {len(product_key)} bytes
 """
+  # keep the LoRa32's own controller identity (scripts/Iown-GenController.py) if present
+  try:
+    old = open(args[2]).read()
+    m = re.search(r"// BEGIN controller identity.*?// END controller identity\n?", old, re.S)
+    if m:
+      header += "\n" + m.group(0)
+      print("kept the existing controller identity block")
+  except FileNotFoundError:
+    pass
   with open(args[2], "w") as f:
     f.write(header)
   print(f"wrote {args[2]} (node {node.hex()}, key not shown)")
