@@ -29,7 +29,8 @@ The LoRa32's SX1276 radio can do the same FSK modulation, so the board can:
 3. **Bridge to Home Assistant** over WiFi/MQTT, exposing each blind as a `cover`.
 
 The authentication key is **derivable from the QR code printed on your remote**,
-using a transfer key that is already public in this project. No key cracking is
+using a transfer key that is already public in the upstream
+[iown-homecontrol](https://github.com/Velocet/iown-homecontrol) project. No key cracking is
 involved — you are using your own remote's credentials.
 
 ---
@@ -55,23 +56,17 @@ add a matching PlatformIO environment.
 ## 3. Toolchain setup
 
 ```bash
-# PlatformIO + the Python helper scripts live in one venv
+# clone with the upstream iown-homecontrol submodule (extern/iown-homecontrol)
+git clone --recurse-submodules <this repo> && cd iown-ha-bridge
+# (already cloned? git submodule update --init)
+
+# PlatformIO + pyserial (for scripts/Iown-Capture.py) in one venv
 python3 -m venv .venv
-.venv/bin/pip install platformio
-.venv/bin/pip install kaitaistruct crc   # for the decode scripts
+.venv/bin/pip install platformio pyserial
 ```
 
-The decode/key scripts import modules named `ioCrypto` and `aes`, but the files
-in `scripts/` are hyphenated (`Iown-ioCrypto.py`, `Iown-AES.py`) and cannot be
-imported under those names. Create import shims once:
-
-```bash
-mkdir -p .venv/shims
-ln -sf "$PWD/scripts/Iown-ioCrypto.py" .venv/shims/ioCrypto.py
-ln -sf "$PWD/scripts/Iown-AES.py"      .venv/shims/aes.py
-```
-
-Then run any script with `PYTHONPATH=.venv/shims`.
+The Python scripts load upstream's crypto (`Iown-ioCrypto.py`, `Iown-AES.py`)
+from the submodule via `scripts/upstream.py`; no other packages are needed.
 
 ---
 
@@ -147,6 +142,9 @@ F6 00 00003F B51A3F 00 0143000000 00 36A9 4AAEAC756EE0 8A69
     3-frame sequence** (stop + the two `02` frames); the single stop frame only
     halts a moving blind.
 
+For a step-by-step capture → decode → test workflow with the helper scripts,
+see [Sniff, decode and test](sniff-decode-test.md).
+
 > **Alternative without flashing anything:** with an RTL-SDR you can decode io
 > frames using [`rtl_433`](https://github.com/merbanan/rtl_433):
 > `rtl_433 -R 189 -f 868.95M -s 1000k`.
@@ -189,12 +187,12 @@ repo** (keep it private), then verify and generate:
 # Put your QR string in, say, ~/.config/iown/situo-qr.txt  (chmod 600)
 
 # 1) Confirm the key reproduces the MACs of frames you sniffed:
-PYTHONPATH=.venv/shims .venv/bin/python scripts/Iown-VerifyQRKey.py \
+python3 scripts/Iown-VerifyQRKey.py \
     ~/.config/iown/situo-qr.txt captures/<your-frames>.txt
 #   -> "productKey decrypted (IV from node ID)  MAC match N/N" means success
 
 # 2) Generate the (git-ignored) key header:
-PYTHONPATH=.venv/shims .venv/bin/python scripts/Iown-GenKeyHeader.py \
+python3 scripts/Iown-GenKeyHeader.py \
     ~/.config/iown/situo-qr.txt include/iown_key.h
 #   The key is written only to the header and never printed.
 ```
@@ -305,6 +303,8 @@ On boot it runs a crypto self-test, joins WiFi and the broker, and publishes
 Test everything with **MQTT Explorer** before relying on HA: watch
 `homeassistant/#` for the discovery configs and `iown/#` for state, then publish
 `OPEN`/`CLOSE`/`STOP` to `iown/<name>/set`, or anything to `iown/<name>/my`.
+From a shell, `scripts/mqtt-test.sh` does the same with the mosquitto clients
+(see [Sniff, decode and test](sniff-decode-test.md#5-test-the-mqtt-firmware)).
 
 - **Stop** only visibly halts a blind that is *moving*.
 - **My** only goes somewhere if you've programmed a favourite with the physical
