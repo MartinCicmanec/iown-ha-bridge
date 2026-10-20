@@ -369,11 +369,15 @@ static void processRx() {
     uint16_t heard = ((uint16_t)frame[n - 10] << 8) | frame[n - 9];
     for(size_t i = 0; i < NBLINDS; i++) {
       Blind& bl = BLINDS[i];
-      if(memcmp(frame + 5, bl.situo.addr, 3) == 0 && heard > counterGet(bl.situo)) {
-        counterSet(bl.situo, heard);
-        mqtt.publish((String("iown/") + bl.name + "/counter").c_str(), String(heard).c_str(), true);
-        Serial.printf("[RX] %s heard counter=0x%04X -> tracked\n", bl.name, heard);
-      }
+      if(memcmp(frame + 5, bl.situo.addr, 3) != 0 || heard <= counterGet(bl.situo)) {continue;}
+      // only trust frames whose MAC checks out: the 0x30 key frame has no MAC, and its
+      // bytes at the counter position are part of the key
+      uint8_t mac[6];
+      create1wMac(frame + n - 10, bl.situo.key, frame + 8, n - 8 - 10, mac);
+      if(memcmp(mac, frame + n - 8, 6) != 0) {continue;}
+      counterSet(bl.situo, heard);
+      publishCounter(bl);
+      Serial.printf("[RX] %s heard counter=0x%04X -> tracked\n", bl.name, heard);
     }
   }
   radio.startReceive();
