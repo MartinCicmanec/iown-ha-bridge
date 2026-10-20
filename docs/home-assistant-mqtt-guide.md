@@ -358,6 +358,10 @@ the motors ignore the LoRa32: publish a value above the last one used (see
 
 ## 10. Limitations
 
+- **Thermal protection.** After a lot of movement in a short time (e.g. testing),
+  a motor may ignore every remote, the original one included. Seen once on a
+  mains-powered motor; it recovered after a 15–20 minute pause. Not confirmed as
+  thermal protection, but no need to re-pair.
 - **Blind order is fixed.** Addresses follow the order of `BLINDS[]`; see
   [Declare your blinds](#declare-your-blinds).
 - **The `0x30` key frame reveals the secret.** It carries the remote's QR

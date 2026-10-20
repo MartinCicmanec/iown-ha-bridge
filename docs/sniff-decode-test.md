@@ -152,4 +152,5 @@ ignore the first command; send it again.
 | No jog after Pair | Motor wasn't in pairing mode: PROG on the remote until the blind jogs first |
 | `[SELFTEST] ... mismatch - halting` | Crypto code is broken (the tests use fixed public vectors, not your keys) |
 | Build error "no controller identity" | Run `scripts/Iown-GenController.py` |
+| Blind ignores every remote, including the original one | Probably the motor's thermal protection after a lot of movement (seen once, not confirmed): wait 15–20 min |
 | `[MQTT] ... rc=5` | Broker rejected the username/password |
