@@ -2,15 +2,14 @@
 
 This guide walks through controlling **Somfy io-homecontrol® blinds** from Home
 Assistant using a cheap ESP32 **LoRa32** board. It covers how the radio traffic
-was captured and decoded, which data you need from your own remote, and how to
-build and flash the firmware.
+was captured and decoded, how to build and flash the firmware, and how to pair
+the board with your motors as an additional remote.
 
 > **Scope and honesty note.** This was reverse-engineered against a *Somfy Situo
 > Variation A/M io Pure II* remote and its blind motors. It implements the
 > **one-way (1W)** io-homecontrol profile only. It has been verified on that
-> hardware; other remotes/motors may differ. The firmware currently *impersonates*
-> your existing remote (see [Limitations](#limitations)). Use it only on
-> equipment you own.
+> hardware; other remotes/motors may differ. The board is paired to each motor as
+> its **own** remote, next to your existing one. Use it only on equipment you own.
 
 ---
 
@@ -22,16 +21,17 @@ sends short, authenticated frames: a message with a command, a 16-bit rolling
 
 The LoRa32's SX1276 radio can do the same FSK modulation, so the board can:
 
-1. **Listen** (sniffer firmware) and decode frames to learn your remote's
-   address and counter.
-2. **Transmit** authenticated frames (tx / mqtt firmware), emulating your remote
-   so the motors obey.
+1. **Listen** (sniffer firmware) and decode frames, to see what your remote sends.
+2. **Act as a 1W remote of its own** (mqtt firmware): it has its own address and
+   secret, is paired to each motor with the same PROG sequence a Somfy remote
+   sends, and then sends authenticated commands.
 3. **Bridge to Home Assistant** over WiFi/MQTT, exposing each blind as a `cover`.
 
-The authentication key is **derivable from the QR code printed on your remote**,
-using a transfer key that is already public in the upstream
-[iown-homecontrol](https://github.com/Velocet/iown-homecontrol) project. No key cracking is
-involved — you are using your own remote's credentials.
+Pairing works like adding a second Somfy remote: your existing remote puts the
+motor into pairing mode, and the LoRa32 sends its key (`0x30` frame). The key
+transfer uses a transfer key that is public in the upstream
+[iown-homecontrol](https://github.com/Velocet/iown-homecontrol) project. Your
+existing remote keeps working independently, with its own counter.
 
 ---
 
@@ -72,14 +72,13 @@ from the submodule via `scripts/upstream.py`; no other packages are needed.
 
 ## 4. Firmware environments
 
-`platformio.ini` defines three environments for the board, each driven by its
+`platformio.ini` defines two environments for the board, each driven by its
 own source file:
 
 | Environment | Source | Purpose |
 | --- | --- | --- |
 | `ttgo-lora32-v21-sniffer` | `src/sniffer.cpp` | Receive-only: decode frames over serial |
-| `ttgo-lora32-v21-tx` | `src/tx.cpp` | One-shot transmit test (counter/level via build flags) |
-| `ttgo-lora32-v21-mqtt` | `src/mqtt.cpp` | The Home Assistant / MQTT integration |
+| `ttgo-lora32-v21-mqtt` | `src/mqtt.cpp` | The Home Assistant / MQTT integration (default) |
 
 Build/flash a given env, e.g.:
 
@@ -151,37 +150,35 @@ see [Sniff, decode and test](sniff-decode-test.md).
 
 ---
 
-## 6. The data you need from *your* remote
+## 6. What you need from your remote
 
-Everything needed to emulate the remote is on the sticker/QR code of the remote
-itself, plus what the sniffer shows:
+To **run** the LoRa32 you need nothing from your remote except its **PROG
+button**: it puts a motor into pairing mode (section 9). The LoRa32 generates its
+own address and secret.
 
-1. **The QR code** on the back of the remote / under the battery cover. For a
-   Situo it is **56 hex characters**, laid out as:
+To **analyse** your remote's traffic (optional), its QR code is useful. On the
+back of the remote / under the battery cover; for a Situo it is **56 hex
+characters**, laid out as:
 
-   ```
-   45 | AABBCC | <32 hex = 16-byte productKey> | <trailer>
-        └ address   └ productKey
-   ```
+```
+45 | AABBCC | <32 hex = 16-byte productKey> | <trailer>
+     └ address   └ productKey
+```
 
-   - `qr[2:8]` — the remote's base **address**
-   - `qr[8:40]` — the 16-byte **productKey** (the secret this whole thing hinges on)
+- `qr[2:8]`: the remote's base **address** (channels use adjacent addresses)
+- `qr[8:40]`: the 16-byte **productKey**, the same value the remote sends in its
+  `0x30` frame when pairing
 
-2. **Each channel's address**, read from the sniffer (one press per channel).
-3. **The current counter** per channel — the sniffer shows it; the firmware then
-   tracks it automatically.
-
-### Deriving the key
-
-The actual AES key is the productKey "decrypted" with the project's public
-**transfer key** and an IV built from the channel address:
+Each channel's key is the productKey "decrypted" with the public **transfer key**
+and an IV built from the channel address:
 
 ```
 key = AES(transfer_key, IV_from_address) XOR productKey
 ```
 
-You don't have to do this by hand. Save the QR text to a file **outside the
-repo** (keep it private), then verify and generate:
+The LoRa32 derives its own keys the same way from its own secret. To check the
+MACs of frames you sniffed from your remote, save the QR text to a file **outside
+the repo** (keep it private), then:
 
 ```bash
 # Put your QR string in, say, ~/.config/iown/situo-qr.txt  (chmod 600)
@@ -191,10 +188,9 @@ python3 scripts/Iown-VerifyQRKey.py \
     ~/.config/iown/situo-qr.txt captures/<your-frames>.txt
 #   -> "productKey decrypted (IV from node ID)  MAC match N/N" means success
 
-# 2) Generate the (git-ignored) key header:
+# 2) Store it for scripts/Iown-Decode.py --key-header (never printed):
 python3 scripts/Iown-GenKeyHeader.py \
     ~/.config/iown/situo-qr.txt include/iown_key.h
-#   The key is written only to the header and never printed.
 ```
 
 ---
@@ -206,28 +202,30 @@ committed next to them.
 
 ### `include/iown_key.h`
 
-Generated by the script in the previous step. Template:
-`include/iown_key.example.h`
+Holds the LoRa32's controller identity (required) and, optionally, your remote's
+productKey for the analysis scripts. Template: `include/iown_key.example.h`
 
 ```c
 #pragma once
 
-#define IOWN_NODE_ID     { 0x00, 0x00, 0x00 }        // 3 bytes, frame order (tx.cpp only)
-#define IOWN_KEY         { 0x00, /* ...16 bytes... */ } // derived key    (tx.cpp only)
-#define IOWN_PRODUCT_KEY { 0x00, /* ...16 bytes... */ } // QR productKey  (mqtt.cpp)
+#define IOWN_PRODUCT_KEY { 0x00, /* ...16 bytes... */ } // optional: remote's QR productKey (analysis only)
 
-// BEGIN controller identity ... (optional, scripts/Iown-GenController.py)
-#define IOWN_CTRL_ADDR   { 0x00, 0x00, 0x00 }        // LoRa32's own base address
-#define IOWN_CTRL_SECRET { 0x00, /* ...16 bytes... */ } // LoRa32's own secret
+// BEGIN controller identity (scripts/Iown-GenController.py) - back this up!
+#define IOWN_CTRL_ADDR   { 0x00, 0x00, 0x00 }        // LoRa32's base address
+#define IOWN_CTRL_SECRET { 0x00, /* ...16 bytes... */ } // LoRa32's secret
 // END controller identity
 ```
 
-The controller identity block is the LoRa32's **own** 1W controller, for pairing
-it with the motors as a separate remote (in progress, see
-[Limitations](#10-limitations)). `python3 scripts/Iown-GenController.py` appends
-it with a random address and secret; it refuses to replace an existing one
-without `--force`. `Iown-GenKeyHeader.py` keeps the block when it regenerates
-the header. Back the header up: losing the identity means re-pairing every blind.
+Create the identity with:
+
+```bash
+python3 scripts/Iown-GenController.py   # random address + secret, secret never printed
+```
+
+It refuses to replace an existing identity without `--force` (and then backs up
+the old header to `~/.config/iown/`). `Iown-GenKeyHeader.py` keeps the block when
+it rewrites the header. **Back the header up:** losing the identity means
+re-pairing every blind.
 
 ### `include/iown_net.h`
 
@@ -251,27 +249,27 @@ Copy the templates and fill them in:
 
 ```bash
 cp include/iown_net.example.h include/iown_net.h   # then edit
-# iown_key.h is produced by Iown-GenKeyHeader.py (section 6)
+# iown_key.h is produced by Iown-GenController.py (above)
 ```
 
 > **Keep these private.** `include/iown_key.h`, `include/iown_net.h` and your QR
 > text are secrets. They are git-ignored — never commit them, and don't paste the
-> productKey anywhere public.
+> secret or productKey anywhere public.
 
 ### Declare your blinds
 
-Edit the `BLINDS[]` table at the top of `src/mqtt.cpp` with
-each blind's name and the channel address you sniffed:
+Edit the `BLINDS[]` table at the top of `src/mqtt.cpp`, one entry per blind:
 
 ```c
 static Blind BLINDS[] = {
-  {"Blind_1", {0xB5,0x1A,0x3F}, 0x3700, {0}}, // name, address, initial counter seed
-  {"Blind_2", {0xB5,0x1A,0x40}, 0x0600, {0}},
+  {"Blind_1"}, // address IOWN_CTRL_ADDR + 0
+  {"Blind_2"}, // address IOWN_CTRL_ADDR + 1
 };
 ```
 
-Set the seed a little above the highest counter you saw for that channel; it is
-only a starting guess and is corrected automatically (section 9).
+A blind's address is `IOWN_CTRL_ADDR` + its index, and the motor is paired to
+that address. **Only append** entries: reordering or removing one moves the
+others to a different address, and those blinds then need re-pairing.
 
 ---
 
@@ -298,9 +296,11 @@ only a starting guess and is corrected automatically (section 9).
 3. Power the board where it has **both** WiFi coverage and 868 MHz range to the
    blinds.
 
-On boot it runs a crypto self-test, joins WiFi and the broker, and publishes
-**Home Assistant MQTT discovery** configs. Each blind appears as a `cover` plus a
-"My" button under a single device, no HA YAML required.
+On boot it prints each blind's address and counter, runs a crypto self-test,
+joins WiFi and the broker, and publishes **Home Assistant MQTT discovery**
+configs. Each blind appears as a `cover` plus a "My" button and a "Pair" button
+(under *Configuration*) in a single device, no HA YAML required. Pair each blind
+before using it (section 9).
 
 ### Topics
 
@@ -310,10 +310,8 @@ On boot it runs a crypto self-test, joins WiFi and the broker, and publishes
 | `iown/<name>/my` | command | any payload (HA sends `MY`): go to favourite |
 | `iown/<name>/state` | status | `open` / `closed` (optimistic) |
 | `iown/<name>/counter` | status | current rolling counter (retained) |
-| `iown/<name>/counter/set` | command | force the counter to a value (resync) |
-| `iown/<name>/pair` | command | send the PROG pairing sequence from the LoRa32's own identity |
-| `iown/<name>/own/set` | command | `OPEN` / `CLOSE` / `STOP` / `MY` from the own identity (test) |
-| `iown/<name>/own/counter` | status | own identity's rolling counter (retained) |
+| `iown/<name>/counter/set` | command | set the counter to a value (decimal) |
+| `iown/<name>/pair` | command | send the PROG pairing sequence (motor in pairing mode) |
 
 Test everything with **MQTT Explorer** before relying on HA: watch
 `homeassistant/#` for the discovery configs and `iown/#` for state, then publish
@@ -327,54 +325,48 @@ From a shell, `scripts/mqtt-test.sh` does the same with the mosquitto clients
 
 ---
 
-## 9. The rolling counter
+## 9. Pairing a blind
 
-The motor accepts a frame only if its counter is **ahead** of the last one it
-accepted. The firmware keeps each channel's counter in flash (NVS), keyed by
-address, and:
-
-- sends one past its stored value on each command, and
-- **passively listens** when idle: when it hears your physical remote, it bumps
-  the stored counter to match. This **self-heals** the desync caused by using the
-  physical remote.
-
-If a blind ever stops responding (counter fell behind), press the physical remote
-once (auto-tracking catches up) or publish a higher number to
-`iown/<name>/counter/set`.
-
-### Pairing the LoRa32 as its own controller
-
-Verified on two blinds with a Situo Variation A/M io Pure II. Each blind has a second identity:
-the LoRa32's own address (`IOWN_CTRL_ADDR` + blind index) with a key derived
-from `IOWN_CTRL_SECRET` (`scripts/Iown-GenController.py`) and its own counter.
+Verified on two blinds with a Situo Variation A/M io Pure II.
 
 1. Stop the blind half-way (a jog is hard to see at an end stop).
-2. Hold PROG on the Situo channel that controls it until the blind jogs (about
+2. Hold PROG on the remote channel that controls it until the blind jogs (about
    3–4 s, never 7 s or more). The motor is now in pairing mode.
-3. Press the blind's **Pair** button in HA (or `scripts/mqtt-test.sh <name> pair`).
-   The LoRa32 sends the same frame sequence the Situo sends on PROG (`0x39`
-   remove, `0x30` with its secret, `0x20`/`0x2E` steps), from its own address.
-4. Test with `scripts/mqtt-test.sh <name> own open` / `own close`. Right after
-   pairing, the motor may ignore the first command (seen once, not explained);
-   send it again.
-5. Once it works, set `own = true` for that blind in `BLINDS[]` (`src/mqtt.cpp`)
-   and re-flash: the cover and My button then use the own identity, and the Situo
-   keeps its own counter. While `own = false`, `counter/set` targets the Situo
-   identity; with `own = true` it targets the own identity.
+3. Press the blind's **Pair** button in HA (or `scripts/mqtt-test.sh <name> pair`),
+   **once**. The LoRa32 sends the same frame sequence the Situo sends on PROG
+   (`0x39` remove, `0x30` with its secret, `0x20`/`0x2E` steps) from the blind's
+   address. The blind jogs to confirm.
+4. Test with the cover in HA (or `scripts/mqtt-test.sh <name> close`). Right
+   after pairing, the motor may ignore the first command (seen once, not
+   explained); send it again.
+
+The motor leaves pairing mode by itself after a while (about 10 minutes
+observed), with a jog. Your remote stays paired throughout.
+
+### The rolling counter
+
+The motor accepts a frame only if its counter is **ahead** of the last one it
+accepted from that address. The firmware keeps each blind's counter in flash
+(NVS), keyed by address, and sends one past it on each command. The LoRa32 and
+your remote have separate addresses, so their counters are independent.
+
+The counters survive re-flashing. If the flash is erased, they restart at 0 and
+the motors ignore the LoRa32: publish a value above the last one used (see
+`iown/<name>/counter`, or the boot log) to `iown/<name>/counter/set`.
 
 ---
 
 ## 10. Limitations
 
-- **Impersonation** (blinds with `own = false`). The board transmits using *your
-  remote's* address, so the board and the physical remote share one counter at
-  the motor and can push each other out of sync. Auto-tracking mitigates it; the
-  fix is to pair the LoRa32 as its own controller, see
-  [Pairing the LoRa32 as its own controller](#pairing-the-lora32-as-its-own-controller).
+- **Blind order is fixed.** Addresses follow the order of `BLINDS[]`; see
+  [Declare your blinds](#declare-your-blinds).
 - **The `0x30` key frame reveals the secret.** It carries the remote's QR
   productKey (or the LoRa32's `IOWN_CTRL_SECRET`), protected only by the public
-  transfer key: anyone sniffing a PROG press or a pairing can derive the keys. This is how 1W
-  io-homecontrol pairing works, not something the firmware can avoid.
+  transfer key: anyone sniffing a PROG press or a pairing can derive the keys.
+  This is how 1W io-homecontrol pairing works, not something the firmware can
+  avoid.
+- **No unpairing yet.** Removing the LoRa32 from a motor (`0x39` from its
+  address in pairing mode) is not implemented.
 - **No feedback.** 1W is fire-and-forget; HA cover state is *assumed*, not
   measured. There is no true position reporting.
 - **Set-favourite** (long-press) is not implemented — program "My" on the
@@ -386,7 +378,7 @@ from `IOWN_CTRL_SECRET` (`scripts/Iown-GenController.py`) and its own counter.
 ## 11. Security & legal
 
 - Operate only on **your own** equipment.
-- The productKey and WiFi/MQTT credentials are secrets; keep them in the
-  git-ignored headers and out of any commit, screenshot or paste.
+- The controller secret, the productKey and WiFi/MQTT credentials are secrets;
+  keep them in the git-ignored headers and out of any commit, screenshot or paste.
 - 868 MHz is licence-free in the EU, but respect local RF regulations and duty
   cycle; these frames are short and infrequent.
