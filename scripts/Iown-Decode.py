@@ -27,6 +27,10 @@ COMMANDS = {
   0x00: "execute function",
   0x01: "activate mode",
   0x20: "private (manufacturer)",
+  0x28: "discover",
+  0x2E: "unknown (seen in discover mode)",
+  0x30: "send 1W key",
+  0x39: "remove 1W controller",
 }
 
 # main parameter of command 0x00 (docs/commands.md "Main Parameter")
