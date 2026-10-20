@@ -10,8 +10,10 @@
  * Output per packet (one line): "RX rssi=<dBm> raw=<hex> frame=<hex> [err@<byte>]"
  * Build/flash: pio run -e ttgo-lora32-v21-sniffer -t upload
  *
- * MIT License
- * Copyright (c) Velocet
+ * Radio parameters and sync word from upstream iown-homecontrol (Velocet), see README.md.
+ *
+ * SPDX-License-Identifier: CC-BY-SA-4.0
+ * Copyright (c) 2026 Martin Cicmanec
  */
 
 #include <Arduino.h>

@@ -13,8 +13,10 @@
  *
  * Build/flash: pio run -e ttgo-lora32-v21-mqtt -t upload
  *
- * MIT License
- * Copyright (c) Velocet
+ * Crypto (IV, MAC, key derivation) ported from upstream iown-homecontrol scripts/Iown-ioCrypto.py (Velocet), see README.md.
+ *
+ * SPDX-License-Identifier: CC-BY-SA-4.0
+ * Copyright (c) 2026 Martin Cicmanec
  */
 
 #include <Arduino.h>

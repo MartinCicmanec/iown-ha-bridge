@@ -12,7 +12,7 @@ Usage: Iown-VerifyQRKey.py <qr payload file> <frames file>
 
 import sys
 
-import ioCrypto
+from upstream import ioCrypto
 
 
 def parse_qr(path):

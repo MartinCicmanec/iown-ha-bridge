@@ -10,8 +10,10 @@
  *
  * Build/flash: PLATFORMIO_BUILD_FLAGS="-DIOWN_TX_COUNTER=0x36C1" pio run -e ttgo-lora32-v21-tx -t upload
  *
- * MIT License
- * Copyright (c) Velocet
+ * Crypto (IV, MAC) ported from upstream iown-homecontrol scripts/Iown-ioCrypto.py (Velocet), see README.md.
+ *
+ * SPDX-License-Identifier: CC-BY-SA-4.0
+ * Copyright (c) 2026 Martin Cicmanec
  */
 
 #include <Arduino.h>

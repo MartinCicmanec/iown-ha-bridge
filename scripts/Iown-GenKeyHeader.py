@@ -13,7 +13,7 @@ Usage: Iown-GenKeyHeader.py <qr payload file> <output header path> [node id hex]
 
 import sys
 
-import ioCrypto
+from upstream import ioCrypto
 
 
 def parse_qr(path):
