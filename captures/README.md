@@ -50,5 +50,9 @@ Findings:
   over `30 + key` and has a length byte that can't fit it.
 - The encrypted key in `0x30` equals the Situo's QR productKey, so the QR code holds the
   key exactly as the remote sends it during pairing.
-- The number of `02 03 05 xx` steps differs per cycle (up to `0C`, `11`, `0E`).
-  Possibly tied to how long PROG was held (not verified).
+- The number of `02 03 05 xx` steps differs per cycle (up to `0C`, `11`, `0E`, and `0A`
+  for a 4 s hold). It does not track the hold time, so its meaning is unknown.
+- The three 2 s presses above were made with the blind at its upper end stop, and it did
+  not jog. A 4 s press with the blind stopped half-way (counter `3826`, same frame
+  sequence) made it jog. Likely the frames are the same and the jog is only visible away from
+  an end stop (inference: hold time vs. position not separated).
