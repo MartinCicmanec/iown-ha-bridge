@@ -2,19 +2,15 @@
  * @file mqtt.cpp "mqtt.cpp"
  * @brief iown-homecontrol 1W controller exposed to Home Assistant over MQTT/WiFi
  *
- * Emulates the paired 1W controller for each configured blind (one HA cover per
- * channel address) and sends authenticated OPEN / CLOSE / STOP(=My) commands.
- * Covers are optimistic (1W has no position feedback). Each channel's rolling
- * counter is kept in NVS and can be resynced over MQTT after a fresh sniff.
+ * The LoRa32 is its own 1W controller: blind i uses address IOWN_CTRL_ADDR + i with
+ * a key derived from IOWN_CTRL_SECRET, paired to the motor like a new remote
+ * (iown/<name>/pair while a paired remote holds the motor in pairing mode).
+ * Each blind is one HA cover with OPEN / CLOSE / STOP plus "My" and "Pair" buttons.
+ * Covers are optimistic (1W has no position feedback). Each blind's rolling
+ * counter is kept in NVS and can be set over MQTT.
  *
- * Secrets: include/iown_key.h (IOWN_PRODUCT_KEY, IOWN_CTRL_*) and include/iown_net.h
- * (WiFi/MQTT), both git-ignored. Per-channel keys are derived at boot from the
- * productKey and the channel address.
- *
- * Own controller (in progress): each blind also has the LoRa32's own 1W identity
- * (IOWN_CTRL_ADDR + index, key derived from IOWN_CTRL_SECRET). iown/<name>/pair sends
- * the Situo's PROG sequence from it (motor must be in pairing mode), iown/<name>/own/set
- * tests it. Set `own` in BLINDS[] to true once a blind is paired to use it everywhere.
+ * Secrets: include/iown_key.h (IOWN_CTRL_*) and include/iown_net.h (WiFi/MQTT),
+ * both git-ignored.
  *
  * Build/flash: pio run -e ttgo-lora32-v21-mqtt -t upload
  *
@@ -37,7 +33,7 @@
 #include <RadioLib.h>
 
 #include "IoHome.h"
-#include "iown_key.h" // IOWN_PRODUCT_KEY, IOWN_CTRL_*  (git-ignored, generated)
+#include "iown_key.h" // IOWN_CTRL_*  (git-ignored, generated)
 #include "iown_net.h" // WiFi + MQTT creds (git-ignored)
 
 #if !defined(IOWN_CTRL_ADDR) || !defined(IOWN_CTRL_SECRET)
@@ -47,32 +43,22 @@
 // io-homecontrol public transfer key (same value as scripts/Iown-ioCrypto.py)
 static const uint8_t TRANSFER_KEY[16] = {
   0x34,0xc3,0x46,0x6e,0xd8,0x8f,0x4e,0x8e,0x16,0xaa,0x47,0x39,0x49,0x88,0x43,0x73};
-static const uint8_t PRODUCT_KEY[16] = IOWN_PRODUCT_KEY; // from git-ignored iown_key.h
-static const uint8_t CTRL_ADDR[3]    = IOWN_CTRL_ADDR;   // LoRa32's own base address
-static const uint8_t CTRL_SECRET[16] = IOWN_CTRL_SECRET; // LoRa32's own secret (sent in 0x30)
-
-// --- one 1W controller identity: address, counter seed, key ---
-struct Ident {
-  uint8_t        addr[3];  // source address, frame order (not secret)
-  uint16_t       seed;     // initial counter if NVS is empty
-  const uint8_t* secret;   // productKey-like secret the key is derived from
-  uint8_t        key[16];  // derived at boot
-};
+static const uint8_t CTRL_ADDR[3]    = IOWN_CTRL_ADDR;   // LoRa32's base address
+static const uint8_t CTRL_SECRET[16] = IOWN_CTRL_SECRET; // LoRa32's secret (sent in 0x30)
 
 // --- blind configuration ---
+// A blind's address is IOWN_CTRL_ADDR + its index here, and the motor is paired to
+// that address: don't reorder or remove entries, only append (or re-pair).
 struct Blind {
-  const char* name;  // HA entity name
-  Ident       situo; // impersonated Situo channel (seed: a bit above last sniffed counter)
-  bool        own;   // false: commands use the Situo identity; true: the LoRa32's own (once paired)
-  Ident       ctrl;  // LoRa32's own identity, filled at boot (IOWN_CTRL_ADDR + index)
+  const char* name;     // HA entity name
+  uint8_t     addr[3];  // filled at boot, frame order (not secret)
+  uint8_t     key[16];  // derived at boot
 };
 static Blind BLINDS[] = {
-  {"Blind_1", {{0xB5,0x1A,0x3F}, 0x3700, PRODUCT_KEY, {0}}, true, {}}, // Situo channel 2, paired 2026-10-21
-  {"Blind_2", {{0xB5,0x1A,0x40}, 0x0600, PRODUCT_KEY, {0}}, true, {}}, // Situo channel 1, paired 2026-10-21
+  {"Blind_1"}, // 131CC6 in this installation, paired 2026-10-21
+  {"Blind_2"}, // 131CC7, paired 2026-10-21
 };
 static const size_t NBLINDS = sizeof(BLINDS) / sizeof(BLINDS[0]);
-
-static Ident& active(Blind& bl) {return bl.own ? bl.ctrl : bl.situo;}
 
 // command payloads (data = command ID + parameters, as captured from the Situo)
 static const uint8_t CMD_OPEN[]  = {0x00, 0x01, 0x43, 0x00, 0x00, 0x00, 0x00};
@@ -84,7 +70,7 @@ static const uint8_t CMD_STOP[]  = {0x00, 0x01, 0x43, 0xD2, 0x00, 0x20, 0xD2, 0x
 static const uint8_t MY_1[] = {0x00, 0x01, 0x43, 0xD2, 0x00, 0x20, 0xD2, 0x00, 0x00};
 static const uint8_t MY_2[] = {0x20, 0x02, 0xFF, 0x01, 0x43, 0x02, 0x0C, 0x00, 0x00};
 static const uint8_t MY_3[] = {0x20, 0x02, 0xFF, 0x01, 0x43, 0x02, 0x05, 0xFF, 0x00};
-struct FrameData {const uint8_t* data;size_t len;bool keyFrame;}; // keyFrame: 0x30 built from the identity
+struct FrameData {const uint8_t* data;size_t len;bool keyFrame;}; // keyFrame: 0x30 built from the secret
 static const FrameData MY_SEQ[] = {{MY_1, sizeof(MY_1)}, {MY_2, sizeof(MY_2)}, {MY_3, sizeof(MY_3)}};
 
 // Pairing: the frame sequence a Situo sends on a PROG press (captures/README.md):
@@ -170,8 +156,8 @@ static uint16_t crc8408(const uint8_t* data, size_t len) {
   return crc;
 }
 
-static size_t buildFrame(const Ident& id, const FrameData& fd,
-                         uint8_t ctrl1, const uint8_t counter[2], uint8_t* out) {
+static size_t buildFrame(const uint8_t addr[3], const uint8_t key[16], const uint8_t secret[16],
+                         const FrameData& fd, uint8_t ctrl1, const uint8_t counter[2], uint8_t* out) {
   static const uint8_t dest[3] = {0x00, 0x00, 0x3F}; // broadcast
   size_t n = 0;
   if(fd.keyFrame) {
@@ -179,9 +165,9 @@ static size_t buildFrame(const Ident& id, const FrameData& fd,
     out[n++] = (uint8_t)(0xE0 | (1 + 3 + 3 + 1 + 16 + 2 + 2));
     out[n++] = ctrl1;
     memcpy(out + n, dest, 3);n += 3;
-    memcpy(out + n, id.addr, 3);n += 3;
+    memcpy(out + n, addr, 3);n += 3;
     out[n++] = 0x30;
-    memcpy(out + n, id.secret, 16);n += 16;
+    memcpy(out + n, secret, 16);n += 16;
     out[n++] = 0x02;out[n++] = 0x01; // manufacturer Somfy, unknown
     out[n++] = counter[0];out[n++] = counter[1];
   } else {
@@ -189,10 +175,10 @@ static size_t buildFrame(const Ident& id, const FrameData& fd,
     out[n++] = (uint8_t)(0xE0 | lenField);
     out[n++] = ctrl1;
     memcpy(out + n, dest, 3);n += 3;
-    memcpy(out + n, id.addr, 3);n += 3;
+    memcpy(out + n, addr, 3);n += 3;
     memcpy(out + n, fd.data, fd.len);n += fd.len;
     out[n++] = counter[0];out[n++] = counter[1];
-    create1wMac(counter, id.key, fd.data, fd.len, out + n);n += 6;
+    create1wMac(counter, key, fd.data, fd.len, out + n);n += 6;
   }
   uint16_t crc = crc8408(out, n);
   out[n++] = (uint8_t)(crc & 0xff);out[n++] = (uint8_t)(crc >> 8);
@@ -217,81 +203,47 @@ static size_t uartEncode(const uint8_t* frame, size_t len, uint8_t* out, size_t 
   return (bit + 7) / 8;
 }
 
-// =================== RX decode (for passive counter tracking) ===================
-#define RX_RAW_LEN (48)
-volatile bool rxFlag = false;
-#if defined(ESP32)
-  ICACHE_RAM_ATTR
-#endif
-static void onReceive() {rxFlag = true;}
-
-static inline uint8_t rawBit(const uint8_t* raw, size_t n) {return (raw[n / 8] >> (7 - (n % 8))) & 1;}
-
-// decode UART framed bytes (start 0, 8 data LSB-first, stop 1); returns decoded length
-static size_t uartDecode(const uint8_t* raw, size_t rawLen, uint8_t* out, size_t outMax) {
-  size_t bits = rawLen * 8, n = 0;
-  for(size_t pos = 0; pos + 10 <= bits && n < outMax; pos += 10) {
-    if(rawBit(raw, pos) != 0 || rawBit(raw, pos + 9) != 1) {break;} // framing error = end of frame
-    uint8_t b = 0;
-    for(uint8_t i = 0; i < 8; i++) {b |= rawBit(raw, pos + 1 + i) << i;}
-    out[n++] = b;
-  }
-  return n;
-}
-
-static void enterReceive() {
-  radio.fixedPacketLengthMode(RX_RAW_LEN);
-  radio.setPacketReceivedAction(onReceive);
-  radio.startReceive();
-}
-
 // =================== counters (NVS) ===================
-// Keyed by channel address (not entity name) so a counter follows its blind
-// even if the name<->address mapping changes. NVS keys must be <= 15 chars.
-static String nvsKey(const Ident& id) {
+// Keyed by address (not entity name) so a counter follows its blind's identity.
+// NVS keys must be <= 15 chars.
+static String nvsKey(const Blind& bl) {
   char k[12];
-  snprintf(k, sizeof(k), "c%02x%02x%02x", id.addr[0], id.addr[1], id.addr[2]);
+  snprintf(k, sizeof(k), "c%02x%02x%02x", bl.addr[0], bl.addr[1], bl.addr[2]);
   return String(k);
 }
-static uint16_t counterGet(const Ident& id) {
-  return (uint16_t)prefs.getUShort(nvsKey(id).c_str(), id.seed);
-}
-static void counterSet(const Ident& id, uint16_t v) {prefs.putUShort(nvsKey(id).c_str(), v);}
+static uint16_t counterGet(const Blind& bl) {return (uint16_t)prefs.getUShort(nvsKey(bl).c_str(), 0);}
+static void counterSet(const Blind& bl, uint16_t v) {prefs.putUShort(nvsKey(bl).c_str(), v);}
 
 // =================== radio TX ===================
 // Transmit a sequence of frames with consecutive counters (base+1, base+2, ...),
 // each repeated like the real remote (first copy with control byte 1 = 0x20).
-static void sendFrames(const char* label, Ident& id, const FrameData* seq, size_t nframes) {
-  uint16_t base = counterGet(id);
+static void sendFrames(Blind& bl, const FrameData* seq, size_t nframes) {
+  uint16_t base = counterGet(bl);
   uint8_t frame[40], air[52];
-
-  radio.clearPacketReceivedAction(); // leave RX cleanly before transmitting
-  radio.standby();
 
   int16_t st = 0;
   for(size_t k = 0; k < nframes; k++) {
     uint16_t c = base + 1 + k;
     uint8_t counter[2] = {(uint8_t)(c >> 8), (uint8_t)(c & 0xff)};
-    size_t flen = buildFrame(id, seq[k], 0x00, counter, frame);
+    size_t flen = buildFrame(bl.addr, bl.key, CTRL_SECRET, seq[k], 0x00, counter, frame);
     size_t alen = uartEncode(frame, flen, air, sizeof(air));
     radio.fixedPacketLengthMode(alen);
     for(int rep = 0; rep < 4; rep++) {
-      buildFrame(id, seq[k], rep == 0 ? 0x20 : 0x00, counter, frame);
+      buildFrame(bl.addr, bl.key, CTRL_SECRET, seq[k], rep == 0 ? 0x20 : 0x00, counter, frame);
       uartEncode(frame, flen, air, sizeof(air));
       st = radio.transmit(air, alen);
       delay(40);
     }
   }
-  counterSet(id, base + nframes);
+  counterSet(bl, base + nframes);
   Serial.printf("[TX] %s %02X%02X%02X base=0x%04X nframes=%u state=%d\n",
-                label, id.addr[0], id.addr[1], id.addr[2], base + 1, (unsigned)nframes, st);
-  rxFlag = false;  // ignore any self-triggered Rx event from the transmit
-  enterReceive();  // back to listening (for passive counter tracking)
+                bl.name, bl.addr[0], bl.addr[1], bl.addr[2], base + 1, (unsigned)nframes, st);
+  radio.standby();
 }
 
-static void sendCommand(const char* label, Ident& id, const uint8_t* data, size_t dataLen) {
+static void sendCommand(Blind& bl, const uint8_t* data, size_t dataLen) {
   FrameData one = {data, dataLen};
-  sendFrames(label, id, &one, 1);
+  sendFrames(bl, &one, 1);
 }
 
 // =================== MQTT topics + discovery ===================
@@ -300,9 +252,8 @@ static String baseTopic(const Blind& bl) {return String("iown/") + bl.name;}
 static void publishState(const Blind& bl, const char* state) {
   mqtt.publish((baseTopic(bl) + "/state").c_str(), state, true);
 }
-static void publishCounter(Blind& bl) {
-  mqtt.publish((baseTopic(bl) + "/counter").c_str(), String(counterGet(active(bl))).c_str(), true);
-  mqtt.publish((baseTopic(bl) + "/own/counter").c_str(), String(counterGet(bl.ctrl)).c_str(), true);
+static void publishCounter(const Blind& bl) {
+  mqtt.publish((baseTopic(bl) + "/counter").c_str(), String(counterGet(bl)).c_str(), true);
 }
 
 static void publishDiscovery(const Blind& bl) {
@@ -341,7 +292,7 @@ static void publishDiscovery(const Blind& bl) {
     String out;serializeJson(d, out);
     mqtt.publish((String("homeassistant/button/") + uid + "_my/config").c_str(), out.c_str(), true);
   }
-  // "Pair" button: pair the LoRa32's own identity (motor must be in pairing mode)
+  // "Pair" button: pair this blind's address (motor must be in pairing mode)
   {
     JsonDocument d;
     d["name"] = String(bl.name) + " Pair";
@@ -355,34 +306,6 @@ static void publishDiscovery(const Blind& bl) {
   }
 }
 
-// process a received frame: if it's a valid 1W frame from one of our blinds,
-// advance that channel's stored counter so we stay ahead of the physical remote
-static void processRx() {
-  rxFlag = false;
-  uint8_t raw[RX_RAW_LEN], frame[RX_RAW_LEN * 8 / 10];
-  if(radio.readData(raw, RX_RAW_LEN) != RADIOLIB_ERR_NONE) {radio.startReceive();return;}
-
-  size_t n = uartDecode(raw, RX_RAW_LEN, frame, sizeof(frame));
-  if(n >= 1) {size_t want = 1 + (frame[0] & 0x1F) + 2;if(want <= n) {n = want;} else {n = 0;}}
-
-  if(n >= 18 && (frame[0] & 0x20) && crc8408(frame, n) == 0) { // 1W frame, CRC valid
-    uint16_t heard = ((uint16_t)frame[n - 10] << 8) | frame[n - 9];
-    for(size_t i = 0; i < NBLINDS; i++) {
-      Blind& bl = BLINDS[i];
-      if(memcmp(frame + 5, bl.situo.addr, 3) != 0 || heard <= counterGet(bl.situo)) {continue;}
-      // only trust frames whose MAC checks out: the 0x30 key frame has no MAC, and its
-      // bytes at the counter position are part of the key
-      uint8_t mac[6];
-      create1wMac(frame + n - 10, bl.situo.key, frame + 8, n - 8 - 10, mac);
-      if(memcmp(mac, frame + n - 8, 6) != 0) {continue;}
-      counterSet(bl.situo, heard);
-      publishCounter(bl);
-      Serial.printf("[RX] %s heard counter=0x%04X -> tracked\n", bl.name, heard);
-    }
-  }
-  radio.startReceive();
-}
-
 static void onMessage(char* topic, byte* payload, unsigned int len) {
   String t(topic), p;
   for(unsigned int i = 0; i < len; i++) {p += (char)payload[i];}
@@ -390,29 +313,22 @@ static void onMessage(char* topic, byte* payload, unsigned int len) {
   for(size_t i = 0; i < NBLINDS; i++) {
     Blind& bl = BLINDS[i];
     String base = baseTopic(bl);
-    Ident& id = active(bl);
     if(t == base + "/set") {
-      if(p == "OPEN")       {sendCommand(bl.name, id, CMD_OPEN, sizeof(CMD_OPEN));publishState(bl, "open");}
-      else if(p == "CLOSE") {sendCommand(bl.name, id, CMD_CLOSE, sizeof(CMD_CLOSE));publishState(bl, "closed");}
-      else if(p == "STOP")  {sendCommand(bl.name, id, CMD_STOP, sizeof(CMD_STOP));}
+      if(p == "OPEN")       {sendCommand(bl, CMD_OPEN, sizeof(CMD_OPEN));publishState(bl, "open");}
+      else if(p == "CLOSE") {sendCommand(bl, CMD_CLOSE, sizeof(CMD_CLOSE));publishState(bl, "closed");}
+      else if(p == "STOP")  {sendCommand(bl, CMD_STOP, sizeof(CMD_STOP));}
       publishCounter(bl);
     } else if(t == base + "/my") {
-      sendFrames(bl.name, id, MY_SEQ, sizeof(MY_SEQ) / sizeof(MY_SEQ[0]));
-      publishCounter(bl);
-    } else if(t == base + "/own/set") { // test the LoRa32's own identity without switching `own`
-      if(p == "OPEN")       {sendCommand(bl.name, bl.ctrl, CMD_OPEN, sizeof(CMD_OPEN));}
-      else if(p == "CLOSE") {sendCommand(bl.name, bl.ctrl, CMD_CLOSE, sizeof(CMD_CLOSE));}
-      else if(p == "STOP")  {sendCommand(bl.name, bl.ctrl, CMD_STOP, sizeof(CMD_STOP));}
-      else if(p == "MY")    {sendFrames(bl.name, bl.ctrl, MY_SEQ, sizeof(MY_SEQ) / sizeof(MY_SEQ[0]));}
+      sendFrames(bl, MY_SEQ, sizeof(MY_SEQ) / sizeof(MY_SEQ[0]));
       publishCounter(bl);
     } else if(t == base + "/pair") {
-      Serial.printf("[PAIR] %s sending PROG sequence from own identity\n", bl.name);
-      sendFrames(bl.name, bl.ctrl, PAIR_SEQ, sizeof(PAIR_SEQ) / sizeof(PAIR_SEQ[0]));
+      Serial.printf("[PAIR] %s sending PROG sequence\n", bl.name);
+      sendFrames(bl, PAIR_SEQ, sizeof(PAIR_SEQ) / sizeof(PAIR_SEQ[0]));
       publishCounter(bl);
     } else if(t == base + "/counter/set") {
-      counterSet(id, (uint16_t)p.toInt());
+      counterSet(bl, (uint16_t)p.toInt());
       publishCounter(bl);
-      Serial.printf("[CTR] %s resynced to %u\n", bl.name, (unsigned)p.toInt());
+      Serial.printf("[CTR] %s set to %u\n", bl.name, (unsigned)p.toInt());
     }
   }
 }
@@ -426,9 +342,9 @@ static void mqttConnect() {
         Blind& bl = BLINDS[i];
         mqtt.subscribe((baseTopic(bl) + "/set").c_str());
         mqtt.subscribe((baseTopic(bl) + "/my").c_str());
-        mqtt.subscribe((baseTopic(bl) + "/own/set").c_str());
         mqtt.subscribe((baseTopic(bl) + "/pair").c_str());
         mqtt.subscribe((baseTopic(bl) + "/counter/set").c_str());
+        mqtt.publish((baseTopic(bl) + "/own/counter").c_str(), "", true); // clear topic of the old two-identity firmware
         publishDiscovery(bl);
         publishCounter(bl);
       }
@@ -439,6 +355,8 @@ static void mqttConnect() {
   }
 }
 
+static void halt(const __FlashStringHelper* what) {Serial.println(what);while(true) {delay(1000);}}
+
 void setup() {
   Serial.begin(115200);
   delay(300);
@@ -447,39 +365,39 @@ void setup() {
   uint32_t ctrlBase = ((uint32_t)CTRL_ADDR[0] << 16) | ((uint32_t)CTRL_ADDR[1] << 8) | CTRL_ADDR[2];
   for(size_t i = 0; i < NBLINDS; i++) {
     Blind& bl = BLINDS[i];
-    deriveKey(bl.situo.addr, bl.situo.secret, bl.situo.key);
-    uint32_t a = ctrlBase + i; // blind i uses own base address + i, like a Situo's channels
-    bl.ctrl.addr[0] = (uint8_t)(a >> 16);bl.ctrl.addr[1] = (uint8_t)(a >> 8);bl.ctrl.addr[2] = (uint8_t)a;
-    bl.ctrl.seed = 0;
-    bl.ctrl.secret = CTRL_SECRET;
-    deriveKey(bl.ctrl.addr, bl.ctrl.secret, bl.ctrl.key);
-    Serial.printf("[CTRL] %s own address %06X (%s)\n", bl.name, (unsigned)a, bl.own ? "in use" : "test/pair only");
+    uint32_t a = ctrlBase + i; // blind i uses base address + i, like a Situo's channels
+    bl.addr[0] = (uint8_t)(a >> 16);bl.addr[1] = (uint8_t)(a >> 8);bl.addr[2] = (uint8_t)a;
+    deriveKey(bl.addr, CTRL_SECRET, bl.key);
+    Serial.printf("[CTRL] %s address %06X counter %u\n", bl.name, (unsigned)a, counterGet(bl));
   }
 
-  // self-test: derived Blind_2 key must reproduce a captured frame's MAC
+  // self-tests with public test vectors (no installation secrets)
   {
-    const uint8_t data[7]    = {0x00,0x01,0x43,0x00,0x00,0x00,0x00};
-    const uint8_t counter[2] = {0x36,0xA9};
-    const uint8_t want[6]    = {0x4A,0xAE,0xAC,0x75,0x6E,0xE0};
-    const uint8_t addr[3]    = {0xB5,0x1A,0x3F};
-    uint8_t k[16], mac[6];
-    deriveKey(addr, PRODUCT_KEY, k);
-    create1wMac(counter, k, data, sizeof(data), mac);
-    if(memcmp(mac, want, 6) != 0) {Serial.println(F("[SELFTEST] key/MAC mismatch - halting"));while(true) {delay(1000);}}
-    Serial.println(F("[SELFTEST] key derivation + MAC OK"));
-  }
-  // self-test: the 0x30 key frame must match the CRC of the Situo's captured one
-  // (channel B51A3F, counter 3827, captures/README.md)
-  {
-    Ident t = {{0xB5,0x1A,0x3F}, 0, PRODUCT_KEY, {0}};
+    // MAC port: upstream docs/linklayer.md example (key 0102..16, seq 1234)
+    const uint8_t k[16]   = {0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x10,0x11,0x12,0x13,0x14,0x15,0x16};
+    const uint8_t d[17]   = {0x30,0x7e,0x60,0x49,0x1f,0x97,0x6a,0xdf,0x65,0x3d,0xb0,0xed,0x78,0x5e,0x49,0xa2,0x01};
+    const uint8_t seq[2]  = {0x12,0x34};
+    const uint8_t want[6] = {0x19,0xe8,0x1e,0xc4,0x3d,0x5e};
+    uint8_t mac[6];
+    create1wMac(seq, k, d, sizeof(d), mac);
+    if(memcmp(mac, want, 6) != 0) {halt(F("[SELFTEST] MAC mismatch - halting"));}
+
+    // key derivation + command frame MAC: secret 0102..16 at address ABCDEF, OPEN at 1234,
+    // expected value from upstream Iown-ioCrypto.py
+    const uint8_t addr[3]  = {0xAB,0xCD,0xEF};
+    const uint8_t want2[6] = {0x8A,0xB1,0x60,0xBB,0xD0,0x98};
+    uint8_t key[16];
+    deriveKey(addr, k, key);
+    create1wMac(seq, key, CMD_OPEN, sizeof(CMD_OPEN), mac);
+    if(memcmp(mac, want2, 6) != 0) {halt(F("[SELFTEST] key derivation mismatch - halting"));}
+
+    // 0x30 key frame layout (verified against a captured Situo frame): same identity,
+    // CRC computed with upstream Iown-ioCrypto.py
     const FrameData kf = {nullptr, 0, true};
-    const uint8_t counter[2] = {0x38,0x27};
     uint8_t f[40];
-    size_t n = buildFrame(t, kf, 0x00, counter, f);
-    if(n != 31 || f[0] != 0xFC || f[29] != 0xF8 || f[30] != 0x9F) {
-      Serial.println(F("[SELFTEST] 0x30 key frame mismatch - halting"));while(true) {delay(1000);}
-    }
-    Serial.println(F("[SELFTEST] 0x30 key frame OK"));
+    size_t n = buildFrame(addr, key, k, kf, 0x00, seq, f);
+    if(n != 31 || f[0] != 0xFC || f[29] != 0xFC || f[30] != 0x54) {halt(F("[SELFTEST] 0x30 key frame mismatch - halting"));}
+    Serial.println(F("[SELFTEST] MAC, key derivation, 0x30 frame OK"));
   }
 
   int16_t st = radio.beginFSK(868.95, 38.4, 19.2, 125.0, 14, 60, false);
@@ -500,13 +418,10 @@ void setup() {
   mqtt.setBufferSize(640); // HA discovery JSON is larger than the 256 default
   mqtt.setServer(IOWN_MQTT_HOST, IOWN_MQTT_PORT);
   mqtt.setCallback(onMessage);
-
-  enterReceive(); // listen for the physical remote to passively track counters
 }
 
 void loop() {
   if(WiFi.status() != WL_CONNECTED) {WiFi.reconnect();delay(500);return;}
   if(!mqtt.connected()) {mqttConnect();}
   mqtt.loop();
-  if(rxFlag) {processRx();}
 }

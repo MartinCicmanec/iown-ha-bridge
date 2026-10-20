@@ -16,12 +16,11 @@ as a git submodule (see [Attribution](#attribution)).
 | Path | What |
 | --- | --- |
 | `src/sniffer.cpp` | Receive-only sniffer firmware (env `ttgo-lora32-v21-sniffer`) |
-| `src/tx.cpp` | One-shot 1W transmit test (env `ttgo-lora32-v21-tx`) |
 | `src/mqtt.cpp` | Home Assistant / MQTT bridge (env `ttgo-lora32-v21-mqtt`) |
 | `scripts/Iown-Capture.py` | Record sniffer serial output to a log |
 | `scripts/Iown-Decode.py` | Decode frames, check CRC and 1W MAC |
 | `scripts/Iown-VerifyQRKey.py` | Check that the QR productKey reproduces sniffed MACs |
-| `scripts/Iown-GenKeyHeader.py` | Generate the git-ignored `include/iown_key.h` |
+| `scripts/Iown-GenKeyHeader.py` | Write the remote's QR productKey to `include/iown_key.h` (analysis only) |
 | `scripts/Iown-GenController.py` | Add the LoRa32's own 1W controller identity to `include/iown_key.h` |
 | `scripts/mqtt-test.sh` | Drive the MQTT firmware with mosquitto clients |
 | `scripts/flash.sh` | Build, upload and reset the board in one step |
@@ -87,19 +86,19 @@ All of these are C++ ports of upstream `scripts/Iown-ioCrypto.py`:
 
 | Here | Upstream function | Notes |
 | --- | --- | --- |
-| `ivChecksum()` in `src/tx.cpp`, `src/mqtt.cpp` | `computeChecksum()` | IV checksum bytes |
-| `buildIV()` in `src/tx.cpp`, `src/mqtt.cpp` | `constructInitialValue()` | 1W sequence-number IV (data padded with `0x55`) |
-| `create1wMac()` in `src/tx.cpp`, `src/mqtt.cpp` | `create_1W_hmac()` | MAC = AES(key, IV)[:6] |
-| `deriveKey()` in `src/mqtt.cpp` | `encrypt_1W_key()` | key = AES(transfer key, IV(address)) XOR productKey |
+| `ivChecksum()` in `src/mqtt.cpp` | `computeChecksum()` | IV checksum bytes |
+| `buildIV()` in `src/mqtt.cpp` | `constructInitialValue()` | 1W sequence-number IV (data padded with `0x55`) |
+| `create1wMac()` in `src/mqtt.cpp` | `create_1W_hmac()` | MAC = AES(key, IV)[:6] |
+| `deriveKey()` in `src/mqtt.cpp` | `encrypt_1W_key()` | key = AES(transfer key, IV(address)) XOR secret |
 | `TRANSFER_KEY` in `src/mqtt.cpp` | `transfer_key` | the public io-homecontrol transfer key |
-| `crc8408()` in `src/tx.cpp`, `src/mqtt.cpp` | `compute_crc_8408()` | also documented in upstream `docs/radio.md` |
+| `crc8408()` in `src/mqtt.cpp` | `compute_crc_8408()` | also documented in upstream `docs/radio.md` |
 
 ### Upstream code used directly
 
 - `extern/iown-homecontrol/src/IoHome.h`: the `IOHOME_SYNC_WORD` and
-  `IOHOME_SYNC_WORD_LEN` constants, used by all three firmwares.
+  `IOHOME_SYNC_WORD_LEN` constants, used by both firmwares.
 - `extern/iown-homecontrol/scripts/Iown-ioCrypto.py` and `Iown-AES.py`: imported
-  at runtime by `Iown-Decode.py`, `Iown-VerifyQRKey.py` and `Iown-GenKeyHeader.py`
+  at runtime by `Iown-Decode.py` and `Iown-VerifyQRKey.py`
   through `scripts/upstream.py`.
 
 ### LoRa32 (submodule `extern/LoRa32`)
@@ -107,7 +106,7 @@ All of these are C++ ports of upstream `scripts/Iown-ioCrypto.py`:
 [Velocet/LoRa32](https://github.com/Velocet/LoRa32) (MIT), used unmodified as a
 PlatformIO library. It provides the radio type and pins: `LORA32_RADIO`,
 `LORA32_SPI_CS`, `LORA32_RADIO_RST`, `LORA32_RADIO_IO0` and `LORA32_RADIO_IO1`,
-used by all three firmwares. See [Board macro workaround](#board-macro-workaround).
+used by both firmwares. See [Board macro workaround](#board-macro-workaround).
 
 ### Taken from upstream documentation
 
@@ -116,7 +115,7 @@ used by all three firmwares. See [Board macro workaround](#board-macro-workaroun
 | Radio: 868.95 MHz (channel 2), 2-FSK, 38.4 kbps, NRZ | `docs/radio.md`, `src/main.cpp` | all firmwares |
 | UART byte framing (start 0, 8 bits LSB first, stop 1) | `docs/radio.md` | `uartEncode()` / `uartDecode()` / `decodeUart()` |
 | Frame layout: ctrl0/ctrl1, dest, src, data, counter, MAC, CRC | `docs/linklayer.md` | `buildFrame()`, `Iown-Decode.py` |
-| MAC test vector (key `0102..16`, seq `1234` → `19e81ec43d5e`) | `docs/linklayer.md` | `selfTest()` in `src/tx.cpp`, `Iown-VerifyQRKey.py` |
+| MAC test vector (key `0102..16`, seq `1234` → `19e81ec43d5e`) | `docs/linklayer.md` | self-test in `src/mqtt.cpp`, `Iown-VerifyQRKey.py` |
 | Command `0x00` (execute function), main parameter (`0x0000`–`0xC800` %, `0xD200` current) | `docs/commands.md` | command constants, `Iown-Decode.py` |
 | Command `0x20` (manufacturer private, `0x02` = Somfy) | `docs/commands.md` | `MY_SEQ` in `src/mqtt.cpp`, `Iown-Decode.py` |
 | Key obfuscation with a shared transfer key (1W) | `docs/linklayer.md` | `deriveKey()` |
@@ -125,8 +124,11 @@ used by all three firmwares. See [Board macro workaround](#board-macro-workaroun
 
 These are not from upstream:
 
-- The MQTT / Home Assistant bridge: discovery, topics, NVS counter store, passive
-  counter tracking, and counter resync.
+- The MQTT / Home Assistant bridge: discovery, topics, NVS counter store and
+  counter resync.
+- Pairing the LoRa32 as its own 1W controller: the real `0x30` frame layout
+  (captured; upstream's example differs) and replaying a remote's PROG sequence
+  from a new address and secret.
 - The 3-frame *go to My* sequence and the observed button codes, captured from a
   Situo remote (`captures/`).
 - The Situo QR payload layout (address at `qr[2:8]`, productKey at `qr[8:40]`).

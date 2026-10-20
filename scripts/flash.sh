@@ -9,7 +9,6 @@
 # Examples:
 #   scripts/flash.sh
 #   scripts/flash.sh ttgo-lora32-v21-sniffer
-#   PLATFORMIO_BUILD_FLAGS="-DIOWN_TX_COUNTER=0x36B5" scripts/flash.sh ttgo-lora32-v21-tx
 #
 # Uses .venv/bin/pio if present, otherwise pio from PATH. The upload builds first;
 # esptool hard-resets the board via RTS when the upload finishes.
