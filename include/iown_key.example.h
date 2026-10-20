@@ -1,7 +1,7 @@
 // Template for include/iown_key.h (git-ignored). DO NOT put real keys in this
 // example file. Generate the real header with:
 //
-//   PYTHONPATH=.venv/shims .venv/bin/python scripts/Iown-GenKeyHeader.py \
+//   python3 scripts/Iown-GenKeyHeader.py \
 //       <qr-text-file> include/iown_key.h [node-id-hex]
 //
 // IOWN_PRODUCT_KEY is the 16-byte "productKey" from your remote's QR code
