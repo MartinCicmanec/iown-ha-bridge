@@ -23,6 +23,7 @@ as a git submodule (see [Attribution](#attribution)).
 | `scripts/Iown-VerifyQRKey.py` | Check that the QR productKey reproduces sniffed MACs |
 | `scripts/Iown-GenKeyHeader.py` | Generate the git-ignored `include/iown_key.h` |
 | `scripts/mqtt-test.sh` | Drive the MQTT firmware with mosquitto clients |
+| `scripts/flash.sh` | Build, upload and reset the board in one step |
 | `scripts/upstream.py` | Loads upstream's Python crypto modules from the submodule |
 | `include/*.example.h` | Templates for the git-ignored key and WiFi/MQTT headers |
 | `captures/` | Real captured frames from a Situo remote |
@@ -38,6 +39,13 @@ python3 -m venv .venv && .venv/bin/pip install platformio pyserial
 
 Both upstream projects come in as submodules, so nothing else needs to be
 cloned. Already cloned without them? Run `git submodule update --init`.
+
+Build, upload and reset in one step (defaults: env `ttgo-lora32-v21-mqtt`,
+port `/dev/ttyACM0`):
+
+```bash
+scripts/flash.sh [env] [port]
+```
 
 ### Board macro workaround
 
