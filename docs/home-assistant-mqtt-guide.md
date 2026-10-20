@@ -46,10 +46,10 @@ involved — you are using your own remote's credentials.
 Other boards with an SX127x/SX126x in **FSK** mode at 868 MHz also work; you then
 add a matching PlatformIO environment.
 
-> The PlatformIO board id `ttgo-lora32-v21` needs a one-line fix in the `LoRa32`
-> support library (a board-macro case mismatch) to compile. This repo's
-> `platformio.ini` points `lib_deps` at a local `../LoRa32` checkout carrying
-> that fix — use the fork, or apply the fix to upstream `LoRa32`.
+> The PlatformIO board id `ttgo-lora32-v21` defines a different board macro
+> spelling than the `LoRa32` support library checks for. `platformio.ini` works
+> around it with `-DARDUINO_TTGO_LORA32_V21NEW`, so upstream LoRa32 (submodule
+> `extern/LoRa32`) is used unmodified. See the README, "Board macro workaround".
 
 ---
 

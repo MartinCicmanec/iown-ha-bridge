@@ -1,3 +1,6 @@
 [submodule "extern/iown-homecontrol"]
 	path = extern/iown-homecontrol
 	url = https://github.com/Velocet/iown-homecontrol.git
+[submodule "extern/LoRa32"]
+	path = extern/LoRa32
+	url = https://github.com/Velocet/LoRa32.git

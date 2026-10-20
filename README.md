@@ -27,6 +27,7 @@ as a git submodule (see [Attribution](#attribution)).
 | `include/*.example.h` | Templates for the git-ignored key and WiFi/MQTT headers |
 | `captures/` | Real captured frames from a Situo remote |
 | `extern/iown-homecontrol` | Upstream submodule, pinned to `b7a526d` |
+| `extern/LoRa32` | Upstream Velocet/LoRa32 submodule (board pins), pinned to `4d4a167` |
 
 ## Quick start
 
@@ -35,13 +36,27 @@ git clone --recurse-submodules <this repo> && cd iown-ha-bridge
 python3 -m venv .venv && .venv/bin/pip install platformio pyserial
 ```
 
-`platformio.ini` expects a LoRa32 checkout next to this repo (`../LoRa32`). It
-needs the TTGO v2.1 board macro fix (fork `MartinCicmanec/LoRa32`, branch
-`fix/ttgo-v21-board-macro`):
+Both upstream projects come in as submodules, so nothing else needs to be
+cloned. Already cloned without them? Run `git submodule update --init`.
 
-```bash
-git clone -b fix/ttgo-v21-board-macro https://github.com/MartinCicmanec/LoRa32.git ../LoRa32
+### Board macro workaround
+
+The board pins come from upstream [LoRa32](https://github.com/Velocet/LoRa32),
+used unmodified. Its `LoRa32.h` detects the TTGO LoRa32 v2.1 by the macro
+`ARDUINO_TTGO_LORA32_V21NEW`, but PlatformIO's `ttgo-lora32-v21` board defines
+`ARDUINO_TTGO_LoRa32_v21new` (different case). Without a match, `LORA32_RADIO`
+is never defined and the build fails with `'LORA32_RADIO' does not name a type`.
+
+`platformio.ini` therefore defines the spelling LoRa32 expects:
+
+```ini
+build_flags = ...
+              -DARDUINO_TTGO_LORA32_V21NEW
 ```
+
+That selects LoRa32's TTGO v2.1 pins: SX1276, SPI 18/27/19/5 (SS, MOSI, MISO,
+SCK), radio 23/26/33/32 (RESET, IO0, IO1, IO2). Remove the flag once LoRa32
+also accepts the PlatformIO spelling.
 
 Then follow the guides:
 
@@ -78,6 +93,13 @@ All of these are C++ ports of upstream `scripts/Iown-ioCrypto.py`:
   at runtime by `Iown-Decode.py`, `Iown-VerifyQRKey.py` and `Iown-GenKeyHeader.py`
   through `scripts/upstream.py`.
 
+### LoRa32 (submodule `extern/LoRa32`)
+
+[Velocet/LoRa32](https://github.com/Velocet/LoRa32) (MIT), used unmodified as a
+PlatformIO library. It provides the radio type and pins: `LORA32_RADIO`,
+`LORA32_SPI_CS`, `LORA32_RADIO_RST`, `LORA32_RADIO_IO0` and `LORA32_RADIO_IO1`,
+used by all three firmwares. See [Board macro workaround](#board-macro-workaround).
+
 ### Taken from upstream documentation
 
 | Topic | Upstream source | Used in |
@@ -108,7 +130,7 @@ These are not from upstream:
 | Dependency | Use | Licence |
 | --- | --- | --- |
 | [RadioLib](https://github.com/jgromes/RadioLib) | SX1276 FSK driver | MIT |
-| [LoRa32](https://github.com/Velocet/LoRa32) (fork with TTGO v2.1 fix) | board pin definitions | MIT |
+| [LoRa32](https://github.com/Velocet/LoRa32) (submodule) | board pin definitions | MIT |
 | [PubSubClient](https://github.com/knolleary/pubsubclient) | MQTT client | MIT |
 | [ArduinoJson](https://github.com/bblanchon/ArduinoJson) | discovery payloads | MIT |
 | ESP32 Arduino core (mbedTLS, Preferences, WiFi) | AES, NVS, WiFi | Apache-2.0 / LGPL |
