@@ -358,6 +358,7 @@ static void mqttConnect() {
 static void halt(const __FlashStringHelper* what) {Serial.println(what);while(true) {delay(1000);}}
 
 void setup() {
+  setCpuFrequencyMhz(80); // lowest clock WiFi supports
   Serial.begin(115200);
   delay(300);
 
@@ -424,4 +425,5 @@ void loop() {
   if(WiFi.status() != WL_CONNECTED) {WiFi.reconnect();delay(500);return;}
   if(!mqtt.connected()) {mqttConnect();}
   mqtt.loop();
+  delay(10); // let the idle task run instead of spinning
 }
